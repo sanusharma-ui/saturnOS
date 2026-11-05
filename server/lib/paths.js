@@ -45,7 +45,9 @@ function resolveSafePath(userPath, mustExist = true) {
 
   let cleaned = userPath.trim();
   if (cleaned.startsWith('~')) {
-    cleaned = path.join(RH, cleaned.slice(1));
+    cleaned = path.join(RH, cleaned.replace(/^~[\\\/]*/, ''));
+  } else if (cleaned.startsWith('/home/sanu')) {
+    cleaned = path.join(RH, cleaned.replace(/^\/home\/sanu[\\\/]*/, ''));
   }
 
   const resolved = path.resolve(RH, cleaned);

@@ -55,7 +55,12 @@
     cleanupShortcuts?.();
   });
 
-  function handleDesktopClick() {
+  function handleDesktopClick(e: MouseEvent) {
+    const target = e.target as HTMLElement;
+    if (!target) return;
+    if (target.closest('.taskbar') || target.closest('.launcher-panel') || target.closest('.qs-panel') || target.closest('.ctx-menu')) {
+      return;
+    }
     launcherOpen = false;
     quickSettingsOpen = false;
   }
@@ -88,6 +93,10 @@
     ontoggleLauncher={() => {
       launcherOpen = !launcherOpen;
       if (launcherOpen) quickSettingsOpen = false;
+    }}
+    onOpenSearch={() => {
+      launcherOpen = true;
+      quickSettingsOpen = false;
     }}
     ontoggleQuickSettings={() => {
       quickSettingsOpen = !quickSettingsOpen;

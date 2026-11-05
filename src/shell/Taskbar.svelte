@@ -11,10 +11,11 @@
     launcherOpen: boolean;
     quickSettingsOpen: boolean;
     ontoggleLauncher: () => void;
+    onOpenSearch: () => void;
     ontoggleQuickSettings: () => void;
   }
 
-  let { launcherOpen, quickSettingsOpen, ontoggleLauncher, ontoggleQuickSettings }: Props = $props();
+  let { launcherOpen, quickSettingsOpen, ontoggleLauncher, onOpenSearch, ontoggleQuickSettings }: Props = $props();
 
   // Clock
   let timeStr = $state('');
@@ -102,13 +103,18 @@
   }
 </script>
 
-<footer class="taskbar">
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<footer class="taskbar" onclick={(e) => e.stopPropagation()}>
   <div class="taskbar-left">
     <!-- Start Button -->
     <button 
       class="start-btn" 
       class:active={launcherOpen} 
-      onclick={ontoggleLauncher}
+      onclick={(e) => {
+        e.stopPropagation();
+        ontoggleLauncher();
+      }}
       title="Start Menu (Super / Meta)"
     >
       <span class="start-icon">
@@ -120,7 +126,10 @@
     <!-- Search Quick Trigger -->
     <button 
       class="taskbar-search-btn"
-      onclick={ontoggleLauncher}
+      onclick={(e) => {
+        e.stopPropagation();
+        onOpenSearch();
+      }}
       title="Search apps and files (Ctrl+Space)"
     >
       <span class="search-icon">
@@ -143,7 +152,10 @@
           class="app-btn"
           class:running={isRunning}
           class:active={isActive}
-          onclick={() => handleAppClick(appId)}
+          onclick={(e) => {
+            e.stopPropagation();
+            handleAppClick(appId);
+          }}
           title={manifest.name}
         >
           <span class="app-icon">
@@ -162,7 +174,8 @@
         <button
           class="app-btn running"
           class:active={win.id === $activeWindowIdStore}
-          onclick={() => {
+          onclick={(e) => {
+            e.stopPropagation();
             if (win.minimized) wmManager.restore(win.id);
             else if (win.id === $activeWindowIdStore) wmManager.minimize(win.id);
             else wmManager.focus(win.id);
@@ -193,7 +206,10 @@
     <!-- Volume -->
     <button 
       class="tray-item tray-btn" 
-      onclick={() => isMuted = !isMuted}
+      onclick={(e) => {
+        e.stopPropagation();
+        isMuted = !isMuted;
+      }}
       title={isMuted ? 'Muted' : 'Volume 100%'}
     >
       <span class="tray-icon">
@@ -205,7 +221,10 @@
     <button 
       class="tray-item tray-btn" 
       class:active={quickSettingsOpen}
-      onclick={ontoggleQuickSettings}
+      onclick={(e) => {
+        e.stopPropagation();
+        ontoggleQuickSettings();
+      }}
       title="Quick Settings"
     >
       <span class="tray-icon">
@@ -216,7 +235,10 @@
     <!-- Clock & Date -->
     <button 
       class="tray-item tray-btn clock-widget"
-      onclick={() => launchApp('clock')}
+      onclick={(e) => {
+        e.stopPropagation();
+        launchApp('clock');
+      }}
       title="Open Clock / Calendar"
     >
       <span class="clock-time">{timeStr}</span>
@@ -226,7 +248,10 @@
     <!-- Show Desktop Peek Button -->
     <button 
       class="show-desktop-btn" 
-      onclick={toggleShowDesktop}
+      onclick={(e) => {
+        e.stopPropagation();
+        toggleShowDesktop();
+      }}
       title="Show Desktop"
     ></button>
   </div>

@@ -14,6 +14,13 @@
     args?: any;
   }
 
+  interface DesktopFileItem {
+    name: string;
+    type: 'dir' | 'file';
+    size: number;
+    mtime: number;
+  }
+
   const DEFAULT_SHORTCUTS: DesktopShortcut[] = [
     { id: 'sc-home', appId: 'files', title: 'Home', icon: 'home' },
     { id: 'sc-editor', appId: 'editor', title: 'Text Editor', icon: 'editor' },
@@ -28,6 +35,7 @@
     { id: 'sc-trash', appId: 'files', title: 'Trash', icon: 'trash', args: { initialPath: '~/.local/share/Trash/files' } }
   ];
 
+  let desktopFiles = $state<DesktopFileItem[]>([]);
   let selectedId = $state<string | null>(null);
 
   // Rubberband selection
@@ -43,6 +51,45 @@
     const height = Math.abs(selStart.y - selCurrent.y);
     return { left, top, width, height };
   });
+
+  async function loadDesktopFiles() {
+    try {
+      const res = await api.listFiles('~/Desktop');
+      if (res && Array.isArray(res.items)) {
+        desktopFiles = res.items;
+      }
+    } catch (e) {
+      console.warn('Failed to load Desktop files:', e);
+    }
+  }
+
+  onMount(() => {
+    loadDesktopFiles();
+  });
+
+  function getFileIcon(filename: string, type: 'dir' | 'file'): string {
+    if (type === 'dir') return 'folder';
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return 'file-image';
+    if (['mp3', 'wav', 'ogg', 'flac'].includes(ext)) return 'file-audio';
+    if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return 'file-video';
+    if (['js', 'ts', 'html', 'css', 'json', 'py', 'sh', 'c', 'md', 'txt'].includes(ext)) return 'file-code';
+    return 'file';
+  }
+
+  function openFileItem(item: DesktopFileItem) {
+    const fullPath = `~/Desktop/${item.name}`;
+    if (item.type === 'dir') {
+      launchApp('files', { initialPath: fullPath });
+    } else {
+      const ext = item.name.split('.').pop()?.toLowerCase() || '';
+      if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'mp3', 'wav', 'ogg', 'mp4', 'webm'].includes(ext)) {
+        launchApp('viewer', { filePath: fullPath });
+      } else {
+        launchApp('editor', { initialFile: fullPath });
+      }
+    }
+  }
 
   function handleDesktopMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
@@ -75,21 +122,38 @@
         label: 'New Folder',
         icon: 'folder',
         action: async () => {
-          const name = 'New Folder';
-          await api.fsMkdir(`~/Desktop/${name}`);
-          notifications.add({ title: 'Desktop', message: `Created "${name}"`, type: 'info' });
+          try {
+            const res = await api.mkdir('~/Desktop', 'New Folder');
+            await loadDesktopFiles();
+            const createdName = res.name || 'New Folder';
+            selectedId = `file-${createdName}`;
+            notifications.add({ title: 'Desktop', message: `Created "${createdName}"`, type: 'info' });
+          } catch (err: any) {
+            notifications.add({ title: 'Error', message: err.message || 'Could not create folder', type: 'error' });
+          }
         }
       },
       {
         label: 'New Text Document',
         icon: 'file',
         action: async () => {
-          const name = 'untitled.txt';
-          await api.fsWrite(`~/Desktop/${name}`, '');
-          launchApp('editor', { initialFile: `~/Desktop/${name}` });
+          try {
+            const name = 'untitled.txt';
+            await api.writeFile(`~/Desktop/${name}`, '');
+            await loadDesktopFiles();
+            selectedId = `file-${name}`;
+            launchApp('editor', { initialFile: `~/Desktop/${name}` });
+          } catch (err: any) {
+            notifications.add({ title: 'Error', message: err.message || 'Could not create file', type: 'error' });
+          }
         }
       },
       { separator: true },
+      {
+        label: 'Refresh',
+        icon: 'refresh',
+        action: () => loadDesktopFiles()
+      },
       {
         label: 'Open Terminal',
         icon: 'terminal',
@@ -109,7 +173,7 @@
     ]);
   }
 
-  function handleIconContextMenu(sc: DesktopShortcut, e: MouseEvent) {
+  function handleShortcutContextMenu(sc: DesktopShortcut, e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     selectedId = sc.id;
@@ -124,7 +188,52 @@
         label: 'Properties',
         icon: 'settings',
         action: () => {
-          notifications.add({ title: sc.title, message: `Application shortcut (${sc.appId})`, type: 'info' });
+          notifications.add({ title: sc.title, message: `System Application (${sc.appId})`, type: 'info' });
+        }
+      }
+    ]);
+  }
+
+  function handleFileContextMenu(item: DesktopFileItem, e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    selectedId = `file-${item.name}`;
+    const fullPath = `~/Desktop/${item.name}`;
+
+    contextMenuStore.open(e.clientX, e.clientY, [
+      {
+        label: 'Open',
+        icon: getFileIcon(item.name, item.type),
+        action: () => openFileItem(item)
+      },
+      {
+        label: 'Rename',
+        icon: 'editor',
+        action: async () => {
+          const newName = prompt('Enter new name:', item.name);
+          if (newName && newName.trim() && newName.trim() !== item.name) {
+            try {
+              await api.rename(fullPath, newName.trim());
+              await loadDesktopFiles();
+            } catch (err: any) {
+              notifications.add({ title: 'Error', message: err.message, type: 'error' });
+            }
+          }
+        }
+      },
+      { separator: true },
+      {
+        label: 'Delete',
+        icon: 'trash',
+        danger: true,
+        action: async () => {
+          try {
+            await api.deleteItem(fullPath);
+            await loadDesktopFiles();
+            notifications.add({ title: 'Desktop', message: `Moved "${item.name}" to Trash`, type: 'info' });
+          } catch (err: any) {
+            notifications.add({ title: 'Error', message: err.message, type: 'error' });
+          }
         }
       }
     ]);
@@ -138,6 +247,7 @@
   oncontextmenu={handleContextMenu}
 >
   <div class="desktop-grid">
+    <!-- 1. Pinned System Shortcuts -->
     {#each DEFAULT_SHORTCUTS as sc (sc.id)}
       <DesktopIcon
         title={sc.title}
@@ -145,7 +255,19 @@
         selected={selectedId === sc.id}
         onselect={() => selectedId = sc.id}
         onlaunch={() => launchApp(sc.appId, sc.args)}
-        oncontextmenu={(e) => handleIconContextMenu(sc, e)}
+        oncontextmenu={(e) => handleShortcutContextMenu(sc, e)}
+      />
+    {/each}
+
+    <!-- 2. Real Desktop Files and Folders -->
+    {#each desktopFiles as item (item.name)}
+      <DesktopIcon
+        title={item.name}
+        icon={getFileIcon(item.name, item.type)}
+        selected={selectedId === `file-${item.name}`}
+        onselect={() => selectedId = `file-${item.name}`}
+        onlaunch={() => openFileItem(item)}
+        oncontextmenu={(e) => handleFileContextMenu(item, e)}
       />
     {/each}
   </div>

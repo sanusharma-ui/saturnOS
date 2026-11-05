@@ -117,12 +117,43 @@ function handleFsPost(pathname, body) {
   }
 
   if (pathname === '/api/fs/mkdir') {
-    const dirPath = resolveSafePath(body.path, true);
-    const folderName = sanitizeName(body.name);
-    const finalPath = path.join(dirPath, folderName);
-    if (fs.existsSync(finalPath)) throw new ApiError(409, 'Directory already exists');
-    fs.mkdirSync(finalPath);
-    return { ok: true, path: finalPath };
+    let parentDir;
+    let folderName;
+
+    if (body.name && typeof body.name === 'string' && body.name.trim()) {
+      const rawTarget = body.path || RH;
+      try {
+        parentDir = resolveSafePath(rawTarget, true);
+      } catch (e) {
+        parentDir = resolveSafePath(rawTarget, false);
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
+      folderName = sanitizeName(body.name);
+    } else if (body.path && typeof body.path === 'string') {
+      const rawPath = body.path.trim();
+      const baseName = path.basename(rawPath);
+      const dirPart = path.dirname(rawPath);
+      const rawTarget = dirPart === '.' ? RH : dirPart;
+      try {
+        parentDir = resolveSafePath(rawTarget, true);
+      } catch (e) {
+        parentDir = resolveSafePath(rawTarget, false);
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
+      folderName = sanitizeName(baseName);
+    } else {
+      throw new ApiError(400, 'Folder path or name is required');
+    }
+
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
+    }
+    const stat = fs.statSync(parentDir);
+    if (!stat.isDirectory()) throw new ApiError(400, 'Parent is not a directory');
+
+    const finalPath = getUniquePath(parentDir, folderName);
+    fs.mkdirSync(finalPath, { recursive: true });
+    return { ok: true, path: finalPath, name: path.basename(finalPath) };
   }
 
   if (pathname === '/api/fs/rename') {
