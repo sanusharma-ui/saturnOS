@@ -1,0 +1,20 @@
+{
+  "id": "light",
+  "name": "Light Lunar",
+  "tokens": {
+    "--bg-space": "#d5dbe6",
+    "--panel-bg": "rgba(246, 248, 252, 0.92)",
+    "--panel-bg-solid": "#f6f8fc",
+    "--surface-1": "rgba(230, 235, 244, 0.85)",
+    "--surface-2": "rgba(215, 222, 235, 0.90)",
+    "--surface-solid": "#e8ecf4",
+    "--text-main": "#141720",
+    "--text-dim": "#4d5566",
+    "--text-muted": "#808a9f",
+    "--border-subtle": "rgba(0, 0, 0, 0.10)",
+    "--border-strong": "rgba(0, 0, 0, 0.20)",
+    "--shadow-window": "0 14px 40px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.12)",
+    "--shadow-window-inactive": "0 6px 20px rgba(0, 0, 0, 0.14)",
+    "--shadow-popover": "0 16px 48px rgba(0, 0, 0, 0.28)"
+  }
+}

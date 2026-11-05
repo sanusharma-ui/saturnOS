@@ -1,0 +1,20 @@
+{
+  "id": "dark",
+  "name": "Dark Space",
+  "tokens": {
+    "--bg-space": "#05070e",
+    "--panel-bg": "rgba(20, 24, 34, 0.88)",
+    "--panel-bg-solid": "#141822",
+    "--surface-1": "rgba(30, 36, 50, 0.75)",
+    "--surface-2": "rgba(42, 50, 70, 0.85)",
+    "--surface-solid": "#222838",
+    "--text-main": "#f0f3f8",
+    "--text-dim": "#9aa2b4",
+    "--text-muted": "#646d82",
+    "--border-subtle": "rgba(255, 255, 255, 0.10)",
+    "--border-strong": "rgba(255, 255, 255, 0.18)",
+    "--shadow-window": "0 14px 40px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4)",
+    "--shadow-window-inactive": "0 8px 24px rgba(0, 0, 0, 0.45)",
+    "--shadow-popover": "0 16px 48px rgba(0, 0, 0, 0.7)"
+  }
+}

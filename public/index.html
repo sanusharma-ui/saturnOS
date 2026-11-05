@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Saturn OS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Wallpaper System: Real photo layer + subtle vignette + fallback CSS space gradient -->
+  <div id="wp">
+    <div id="wp-image"></div>
+    <div id="wp-vignette"></div>
+  </div>
+
+  <!-- Desktop Icons & Rubberband Selection Surface -->
+  <div id="desktop"></div>
+  <div id="selection-box"></div>
+
+  <!-- Window Manager Overlays -->
+  <div id="snap-preview"></div>
+  <div id="alt-tab-overlay"></div>
+
+  <!-- Taskbar / Dock -->
+  <div id="taskbar"></div>
+
+  <!-- Quick Settings Popover -->
+  <div id="quick-settings"></div>
+
+  <!-- Launcher & Global Search (Ctrl+Space / Meta) -->
+  <div id="launcher">
+    <div id="launcher-card">
+      <div id="launcher-search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35"/>
+        </svg>
+        <input type="text" id="launcher-input" placeholder="Search apps, files, settings, or ask Saturn AI..." autocomplete="off">
+      </div>
+      <div id="launcher-results"></div>
+    </div>
+  </div>
+
+  <!-- Context Menu (Desktop, Files, Taskbar, Titlebar) -->
+  <div id="context-menu"></div>
+
+  <!-- Toast Notifications Container -->
+  <div id="toast-container"></div>
+
+  <!-- Fullscreen Lock Screen -->
+  <div id="lock-screen">
+    <div id="lock-screen-clock">12:00</div>
+    <div id="lock-screen-date">Thursday, November 5</div>
+    <input type="password" id="lock-screen-input" placeholder="Password" style="display: none;" autocomplete="off">
+    <div id="lock-screen-hint">Press any key or click to unlock</div>
+  </div>
+
+  <!-- Modal Dialog Overlay (Confirmation, Prompts, Properties) -->
+  <div id="modal-overlay">
+    <div id="modal-box"></div>
+  </div>
+
+  <!-- Elegant Boot Screen (Fades in under 3s) -->
+  <div id="boot-screen">
+    <div id="boot-logo">
+      <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="22" fill="#d9c08f"/>
+        <ellipse cx="50" cy="52" rx="46" ry="12" stroke="#e8d9b5" stroke-width="3" transform="rotate(-18 50 50)"/>
+        <path d="M28 44c14 5 32 5 44-3" stroke="rgba(0,0,0,0.25)" stroke-width="2"/>
+      </svg>
+    </div>
+    <div id="boot-title">SATURN OS</div>
+    <div id="boot-sub">AI-FIRST DESKTOP</div>
+  </div>
+
+  <!-- Scripts: Plain modular JavaScript (No build step, no external dependencies) -->
+  <script src="js/icons.js"></script>
+  <script src="js/wm.js"></script>
+  <script src="js/shell.js"></script>
+  <script src="js/apps.js"></script>
+  <script src="js/ai.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      window.SaturnShell.init();
+    });
+  </script>
+</body>
+</html>
