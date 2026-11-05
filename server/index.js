@@ -13,6 +13,7 @@ const { handlePowerPost } = require('./routes/power');
 const { handleLaunchPost } = require('./routes/launch');
 const { handleFileGet } = require('./routes/file');
 const { handleLlmHealth, handleLlmChat } = require('./routes/llm');
+const { handleTerminalUpgrade, handleTerminalSessionsGet, handleTerminalKillPost } = require('./routes/terminal');
 
 const PORT = 3000;
 const HOST = '127.0.0.1';
@@ -127,6 +128,9 @@ const server = http.createServer(async (req, res) => {
         if (pathname.startsWith('/api/fs/')) {
           return sendJson(res, 200, handleFsGet(pathname, parsedUrl.searchParams));
         }
+        if (pathname === '/api/terminal/sessions') {
+          return sendJson(res, 200, handleTerminalSessionsGet());
+        }
         if (pathname === '/api/llm/health') {
           return await handleLlmHealth(res);
         }
@@ -149,6 +153,9 @@ const server = http.createServer(async (req, res) => {
         if (pathname.startsWith('/api/fs/')) {
           return sendJson(res, 200, handleFsPost(pathname, body));
         }
+        if (pathname === '/api/terminal/kill') {
+          return sendJson(res, 200, handleTerminalKillPost(body));
+        }
         throw new ApiError(404, 'Unknown API POST endpoint');
       }
 
@@ -169,6 +176,10 @@ const server = http.createServer(async (req, res) => {
       res.end();
     }
   }
+});
+
+server.on('upgrade', (req, socket, head) => {
+  handleTerminalUpgrade(req, socket, head);
 });
 
 server.listen(PORT, HOST, () => {

@@ -99,5 +99,7 @@ export const api = {
     const res = await fetch('/api/llm/health');
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, data };
-  }
+  },
+  getTerminalSessions: () => request<{ ok: boolean; sessions: Array<{ sessionId: string; shell: string; pid: number; startedAt: number; active: boolean }> }>('/api/terminal/sessions'),
+  killTerminalSession: (sessionId: string, signal?: string) => request<{ ok: boolean; sessionId: string }>('/api/terminal/kill', { method: 'POST', body: JSON.stringify({ sessionId, signal }) })
 };
