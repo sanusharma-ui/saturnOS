@@ -162,7 +162,7 @@ saturnOS/
 ### Local Installation & Development
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/saturnOS.git
+   git clone https://github.com/sanusharma-ui/saturnOS
    cd saturnOS
    ```
 
