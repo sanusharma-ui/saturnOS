@@ -1,27 +1,70 @@
 'use strict';
 
 const cp = require('child_process');
+const fs = require('fs');
 const os = require('os');
-const { RH } = require('./paths');
+const { RH, resolveSafePath } = require('./paths');
 
-function resolveDefaultShell() {
-  if (process.platform === 'win32') {
-    return process.env.COMSPEC || 'powershell.exe';
+function resolveShell(requestedShell) {
+  const isWin = process.platform === 'win32';
+
+  if (isWin) {
+    if (requestedShell) {
+      const lower = requestedShell.toLowerCase();
+      if (lower.includes('cmd')) return { cmd: 'cmd.exe', args: [] };
+      if (lower.includes('powershell') || lower.includes('pwsh')) {
+        return { cmd: 'powershell.exe', args: ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass'] };
+      }
+      if (lower.includes('bash')) {
+        // Check for Git Bash or WSL bash
+        const gitBash = 'C:\\Program Files\\Git\\bin\\bash.exe';
+        if (fs.existsSync(gitBash)) return { cmd: gitBash, args: ['-i'] };
+      }
+    }
+    // Default to PowerShell on Windows for real PC power
+    return { cmd: 'powershell.exe', args: ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass'] };
   }
-  if (process.env.SHELL) {
-    return process.env.SHELL;
+
+  // POSIX (Linux / Alpine / macOS)
+  if (requestedShell) {
+    return { cmd: requestedShell, args: ['-i'] };
   }
-  return '/bin/sh';
+  if (process.env.SHELL && fs.existsSync(process.env.SHELL)) {
+    return { cmd: process.env.SHELL, args: ['-i'] };
+  }
+  if (fs.existsSync('/bin/bash')) {
+    return { cmd: '/bin/bash', args: ['-i'] };
+  }
+  return { cmd: '/bin/sh', args: ['-i'] };
 }
 
 class TerminalSession {
-  constructor(id, onOutput, onExit) {
+  constructor(id, onOutput, onExit, options = {}) {
     this.id = id;
     this.onOutput = onOutput;
     this.onExit = onExit;
     this.startedAt = Date.now();
     this.active = false;
-    this.shell = resolveDefaultShell();
+    this.cols = options.cols || 80;
+    this.rows = options.rows || 24;
+
+    // Resolve working directory
+    let workingDir = RH;
+    if (options.cwd) {
+      try {
+        workingDir = resolveSafePath(options.cwd, true);
+        const stat = fs.statSync(workingDir);
+        if (!stat.isDirectory()) workingDir = RH;
+      } catch (e) {
+        workingDir = RH;
+      }
+    }
+    this.cwd = workingDir;
+
+    // Resolve shell
+    const { cmd, args } = resolveShell(options.shell);
+    this.shell = cmd;
+    this.shellArgs = args;
     this.process = null;
 
     this.spawn();
@@ -29,19 +72,20 @@ class TerminalSession {
 
   spawn() {
     const isWin = process.platform === 'win32';
-    const shellArgs = isWin ? [] : ['-i'];
-
     const env = {
       ...process.env,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
+      LANG: 'en_US.UTF-8',
+      COLUMNS: String(this.cols),
+      LINES: String(this.rows),
       HOME: RH,
       USER: process.env.USER || 'sanu'
     };
 
     try {
-      this.process = cp.spawn(this.shell, shellArgs, {
-        cwd: RH,
+      this.process = cp.spawn(this.shell, this.shellArgs, {
+        cwd: this.cwd,
         env,
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true
@@ -82,8 +126,25 @@ class TerminalSession {
     }
   }
 
+  resize(cols, rows) {
+    this.cols = cols;
+    this.rows = rows;
+    // Update env variables for subsequent subprocesses
+    if (this.process && this.process.env) {
+      this.process.env.COLUMNS = String(cols);
+      this.process.env.LINES = String(rows);
+    }
+  }
+
   kill(signal = 'SIGTERM') {
     if (this.active && this.process) {
+      if (signal === 'SIGINT' && process.platform === 'win32') {
+        // On Windows, send Ctrl+C byte (\x03) into stdin to break running command
+        try {
+          this.process.stdin.write('\x03');
+        } catch (e) {}
+        return;
+      }
       try {
         this.process.kill(signal);
       } catch (e) {}
@@ -95,9 +156,12 @@ class TerminalSession {
     return {
       sessionId: this.id,
       shell: this.shell,
+      cwd: this.cwd,
       pid: this.process ? this.process.pid : 0,
       startedAt: this.startedAt,
-      active: this.active
+      active: this.active,
+      cols: this.cols,
+      rows: this.rows
     };
   }
 }
@@ -107,11 +171,11 @@ class TerminalSessionManager {
     this.sessions = new Map();
   }
 
-  create(id, onOutput, onExit) {
+  create(id, onOutput, onExit, options = {}) {
     if (this.sessions.has(id)) {
       this.destroy(id);
     }
-    const session = new TerminalSession(id, onOutput, onExit);
+    const session = new TerminalSession(id, onOutput, onExit, options);
     this.sessions.set(id, session);
     return session;
   }
@@ -129,6 +193,15 @@ class TerminalSessionManager {
     return false;
   }
 
+  resize(id, cols, rows) {
+    const session = this.get(id);
+    if (session) {
+      session.resize(cols, rows);
+      return true;
+    }
+    return false;
+  }
+
   kill(id, signal) {
     const session = this.get(id);
     if (session) {
@@ -141,7 +214,7 @@ class TerminalSessionManager {
   destroy(id) {
     const session = this.get(id);
     if (session) {
-      session.kill();
+      session.kill('SIGKILL');
       this.sessions.delete(id);
       return true;
     }
@@ -149,8 +222,8 @@ class TerminalSessionManager {
   }
 
   destroyAll() {
-    for (const [id, session] of this.sessions.entries()) {
-      session.kill();
+    for (const [, session] of this.sessions.entries()) {
+      session.kill('SIGKILL');
     }
     this.sessions.clear();
   }

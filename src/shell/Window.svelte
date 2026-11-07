@@ -195,7 +195,8 @@
   <div class="window-content">
     {#if manifest?.component}
       {@const AppComp = manifest.component}
-      <AppComp {...win.arg} />
+      {@const props = (typeof win.arg === 'object' && win.arg !== null) ? win.arg : { arg: win.arg }}
+      <AppComp {...props} arg={props.arg ?? props.initialPath ?? props.initialFile ?? props.filePath} />
     {:else}
       <div class="empty-win-msg">No component found for {win.appId}</div>
     {/if}

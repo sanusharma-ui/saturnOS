@@ -19,8 +19,14 @@ try {
 
 const TRASH_DIR = path.join(RH, '.saturn-trash');
 const DESKTOP_DIR = path.join(RH, 'Desktop');
+const DOCUMENTS_DIR = path.join(RH, 'Documents');
+const DOWNLOADS_DIR = path.join(RH, 'Downloads');
+const PICTURES_DIR = path.join(RH, 'Pictures');
+const MUSIC_DIR = path.join(RH, 'Music');
+const VIDEOS_DIR = path.join(RH, 'Videos');
 
-for (const dir of [TRASH_DIR, DESKTOP_DIR]) {
+// Ensure all standard user folders exist
+for (const dir of [TRASH_DIR, DESKTOP_DIR, DOCUMENTS_DIR, DOWNLOADS_DIR, PICTURES_DIR, MUSIC_DIR, VIDEOS_DIR]) {
   try {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   } catch (e) {}
@@ -34,24 +40,48 @@ class ApiError extends Error {
 }
 
 function isInsideBase(targetPath) {
-  const rel = path.relative(RH, targetPath);
+  const normBase = path.resolve(RH);
+  const normTarget = path.resolve(targetPath);
+  if (process.platform === 'win32') {
+    const rel = path.relative(normBase.toLowerCase(), normTarget.toLowerCase());
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  }
+  const rel = path.relative(normBase, normTarget);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 function resolveSafePath(userPath, mustExist = true) {
-  if (typeof userPath !== 'string' || !userPath || userPath.length > 4096 || userPath.includes('\0')) {
+  if (userPath === undefined || userPath === null) {
+    return RH;
+  }
+  if (typeof userPath !== 'string' || userPath.length > 4096 || userPath.includes('\0')) {
     throw new ApiError(400, 'Invalid path');
   }
 
   let cleaned = userPath.trim();
-  if (cleaned.startsWith('~')) {
-    cleaned = path.join(RH, cleaned.replace(/^~[\\\/]*/, ''));
-  } else if (cleaned.startsWith('/home/sanu')) {
-    cleaned = path.join(RH, cleaned.replace(/^\/home\/sanu[\\\/]*/, ''));
+  if (cleaned === '' || cleaned === '.' || cleaned === '~' || cleaned === '/' || cleaned === '\\') {
+    return RH;
   }
 
-  const resolved = path.resolve(RH, cleaned);
+  // Handle ~ prefix
+  if (cleaned.startsWith('~')) {
+    cleaned = cleaned.replace(/^~[\\\/]*/, '');
+  } else if (cleaned.startsWith('/home/sanu')) {
+    cleaned = cleaned.replace(/^\/home\/sanu[\\\/]*/, '');
+  } else if (/^[\\\/](?![a-zA-Z]:)/.test(cleaned)) {
+    // Leading slash, but not Windows drive root like /C:/
+    cleaned = cleaned.replace(/^[\\\/]+/, '');
+  }
+
+  let resolved;
+  if (path.isAbsolute(cleaned)) {
+    resolved = path.normalize(cleaned);
+  } else {
+    resolved = path.resolve(RH, cleaned);
+  }
+
   if (!isInsideBase(resolved)) {
+    // If path is outside base, throw 403
     throw new ApiError(403, 'Path outside allowed directory');
   }
 
@@ -67,7 +97,8 @@ function resolveSafePath(userPath, mustExist = true) {
       const parentDir = fs.realpathSync(path.dirname(resolved));
       finalPath = path.join(parentDir, path.basename(resolved));
     } catch (e) {
-      throw new ApiError(404, 'Parent folder not found');
+      // Parent might not exist yet, but is inside base
+      finalPath = resolved;
     }
   }
 
@@ -94,7 +125,7 @@ function getUniquePath(dir, filename) {
 
   const ext = path.extname(filename);
   const base = path.basename(filename, ext);
-  let counter = 1;
+  let counter = 2;
   while (fs.existsSync(target)) {
     target = path.join(dir, `${base} (${counter++})${ext}`);
   }
@@ -110,15 +141,59 @@ function moveFileOrFolder(src, dest) {
   }
 }
 
+// Trash metadata manager
+const TRASH_META_FILE = path.join(TRASH_DIR, '.metadata.json');
+
+function getTrashMetadata() {
+  try {
+    if (fs.existsSync(TRASH_META_FILE)) {
+      return JSON.parse(fs.readFileSync(TRASH_META_FILE, 'utf8'));
+    }
+  } catch (e) {}
+  return {};
+}
+
+function saveTrashMetadata(meta) {
+  try {
+    fs.writeFileSync(TRASH_META_FILE, JSON.stringify(meta, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+function recordTrashItem(trashFileName, originalPath) {
+  const meta = getTrashMetadata();
+  meta[trashFileName] = {
+    originalPath,
+    deletedAt: Date.now()
+  };
+  saveTrashMetadata(meta);
+}
+
+function removeTrashItemMeta(trashFileName) {
+  const meta = getTrashMetadata();
+  if (meta[trashFileName]) {
+    delete meta[trashFileName];
+    saveTrashMetadata(meta);
+  }
+}
+
 module.exports = {
   RH,
   BASE_DIR,
   TRASH_DIR,
   DESKTOP_DIR,
+  DOCUMENTS_DIR,
+  DOWNLOADS_DIR,
+  PICTURES_DIR,
+  MUSIC_DIR,
+  VIDEOS_DIR,
   ApiError,
   isInsideBase,
   resolveSafePath,
   sanitizeName,
   getUniquePath,
-  moveFileOrFolder
+  moveFileOrFolder,
+  getTrashMetadata,
+  saveTrashMetadata,
+  recordTrashItem,
+  removeTrashItemMeta
 };

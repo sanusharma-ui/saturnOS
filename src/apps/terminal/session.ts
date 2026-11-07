@@ -10,6 +10,10 @@ export type SessionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
 export interface TerminalSessionOptions {
   sessionId?: string;
+  shell?: string;
+  cwd?: string;
+  cols?: number;
+  rows?: number;
   onOutput?: (data: string) => void;
   onReady?: (info: TerminalSessionInfo) => void;
   onExit?: (code: number, signal?: string) => void;
@@ -41,7 +45,19 @@ export class TerminalSessionClient {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host || '127.0.0.1:3000';
-    const url = `${protocol}//${host}/api/terminal/ws?id=${encodeURIComponent(this.id)}`;
+    let url = `${protocol}//${host}/api/terminal/ws?id=${encodeURIComponent(this.id)}`;
+    if (this.options.shell) {
+      url += `&shell=${encodeURIComponent(this.options.shell)}`;
+    }
+    if (this.options.cwd) {
+      url += `&cwd=${encodeURIComponent(this.options.cwd)}`;
+    }
+    if (this.options.cols) {
+      url += `&cols=${this.options.cols}`;
+    }
+    if (this.options.rows) {
+      url += `&rows=${this.options.rows}`;
+    }
 
     try {
       this.ws = new WebSocket(url);
@@ -165,7 +181,7 @@ export class TerminalSessionClient {
       if (this.shouldReconnect) {
         this.connect();
       }
-    }, 2000);
+    }, 2500);
   }
 
   private setState(state: SessionState): void {

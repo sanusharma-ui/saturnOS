@@ -16,23 +16,24 @@
 
   interface DesktopFileItem {
     name: string;
+    path: string;
     type: 'dir' | 'file';
     size: number;
     mtime: number;
   }
 
   const DEFAULT_SHORTCUTS: DesktopShortcut[] = [
-    { id: 'sc-home', appId: 'files', title: 'Home', icon: 'home' },
+    { id: 'sc-home', appId: 'files', title: 'Home', icon: 'home', args: { initialPath: '~' } },
     { id: 'sc-editor', appId: 'editor', title: 'Text Editor', icon: 'editor' },
     { id: 'sc-ai', appId: 'ai', title: 'Saturn AI', icon: 'ai' },
-    { id: 'sc-terminal', appId: 'terminal', title: 'Terminal', icon: 'terminal' },
+    { id: 'sc-terminal', appId: 'terminal', title: 'Terminal', icon: 'terminal', args: { cwd: '~/Desktop' } },
     { id: 'sc-browser', appId: 'browser', title: 'Web Browser', icon: 'browser' },
     { id: 'sc-monitor', appId: 'monitor', title: 'System Monitor', icon: 'monitor' },
     { id: 'sc-settings', appId: 'settings', title: 'Settings', icon: 'settings' },
     { id: 'sc-calc', appId: 'calc', title: 'Calculator', icon: 'calc' },
     { id: 'sc-clock', appId: 'clock', title: 'Clock', icon: 'clock' },
     { id: 'sc-calendar', appId: 'calendar', title: 'Calendar', icon: 'calendar' },
-    { id: 'sc-trash', appId: 'files', title: 'Trash', icon: 'trash', args: { initialPath: '~/.local/share/Trash/files' } }
+    { id: 'sc-trash', appId: 'files', title: 'Trash', icon: 'trash', args: { initialPath: '~/.saturn-trash' } }
   ];
 
   let desktopFiles = $state<DesktopFileItem[]>([]);
@@ -56,7 +57,13 @@
     try {
       const res = await api.listFiles('~/Desktop');
       if (res && Array.isArray(res.items)) {
-        desktopFiles = res.items;
+        desktopFiles = res.items.map(item => ({
+          name: item.name,
+          path: item.path,
+          type: item.type === 'dir' ? 'dir' : 'file',
+          size: item.size || 0,
+          mtime: item.mtime || 0
+        }));
       }
     } catch (e) {
       console.warn('Failed to load Desktop files:', e);
@@ -70,15 +77,15 @@
   function getFileIcon(filename: string, type: 'dir' | 'file'): string {
     if (type === 'dir') return 'folder';
     const ext = filename.split('.').pop()?.toLowerCase() || '';
-    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return 'file-image';
-    if (['mp3', 'wav', 'ogg', 'flac'].includes(ext)) return 'file-audio';
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico'].includes(ext)) return 'file-image';
+    if (['mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext)) return 'file-audio';
     if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return 'file-video';
-    if (['js', 'ts', 'html', 'css', 'json', 'py', 'sh', 'c', 'md', 'txt'].includes(ext)) return 'file-code';
+    if (['js', 'ts', 'html', 'css', 'json', 'py', 'sh', 'bat', 'c', 'md', 'txt'].includes(ext)) return 'file-code';
     return 'file';
   }
 
   function openFileItem(item: DesktopFileItem) {
-    const fullPath = `~/Desktop/${item.name}`;
+    const fullPath = item.path || `~/Desktop/${item.name}`;
     if (item.type === 'dir') {
       launchApp('files', { initialPath: fullPath });
     } else {
@@ -93,7 +100,6 @@
 
   function handleDesktopMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
-    // Clicked background
     selectedId = null;
     contextMenuStore.close();
 
@@ -123,11 +129,10 @@
         icon: 'folder',
         action: async () => {
           try {
-            const res = await api.mkdir('~/Desktop', 'New Folder');
+            const res = await api.createItem('~/Desktop', 'dir', 'New Folder');
             await loadDesktopFiles();
-            const createdName = res.name || 'New Folder';
-            selectedId = `file-${createdName}`;
-            notifications.add({ title: 'Desktop', message: `Created "${createdName}"`, type: 'info' });
+            selectedId = `file-${res.name}`;
+            notifications.add({ title: 'Desktop', message: `Created "${res.name}"`, type: 'info' });
           } catch (err: any) {
             notifications.add({ title: 'Error', message: err.message || 'Could not create folder', type: 'error' });
           }
@@ -138,13 +143,26 @@
         icon: 'file',
         action: async () => {
           try {
-            const name = 'untitled.txt';
-            await api.writeFile(`~/Desktop/${name}`, '');
+            const res = await api.createItem('~/Desktop', 'file', 'New Text Document.txt');
             await loadDesktopFiles();
-            selectedId = `file-${name}`;
-            launchApp('editor', { initialFile: `~/Desktop/${name}` });
+            selectedId = `file-${res.name}`;
+            launchApp('editor', { initialFile: res.path });
           } catch (err: any) {
             notifications.add({ title: 'Error', message: err.message || 'Could not create file', type: 'error' });
+          }
+        }
+      },
+      {
+        label: 'New Script',
+        icon: 'terminal',
+        action: async () => {
+          try {
+            const res = await api.createItem('~/Desktop', 'file', 'script.sh', '#!/bin/sh\n\necho "Hello from Saturn OS"\n');
+            await loadDesktopFiles();
+            selectedId = `file-${res.name}`;
+            launchApp('editor', { initialFile: res.path });
+          } catch (err: any) {
+            notifications.add({ title: 'Error', message: err.message || 'Could not create script', type: 'error' });
           }
         }
       },
@@ -155,9 +173,9 @@
         action: () => loadDesktopFiles()
       },
       {
-        label: 'Open Terminal',
+        label: 'Open Terminal Here',
         icon: 'terminal',
-        action: () => launchApp('terminal')
+        action: () => launchApp('terminal', { cwd: '~/Desktop' })
       },
       { separator: true },
       {
@@ -166,7 +184,7 @@
         action: () => launchApp('settings')
       },
       {
-        label: 'Display Settings',
+        label: 'Settings',
         icon: 'settings',
         action: () => launchApp('settings')
       }
@@ -198,13 +216,36 @@
     e.preventDefault();
     e.stopPropagation();
     selectedId = `file-${item.name}`;
-    const fullPath = `~/Desktop/${item.name}`;
+    const fullPath = item.path || `~/Desktop/${item.name}`;
 
     contextMenuStore.open(e.clientX, e.clientY, [
       {
         label: 'Open',
         icon: getFileIcon(item.name, item.type),
         action: () => openFileItem(item)
+      },
+      {
+        label: 'Open With',
+        icon: 'editor',
+        action: () => {},
+        submenu: [
+          { label: 'Text Editor', action: () => launchApp('editor', { initialFile: fullPath }) },
+          { label: 'Media Viewer', action: () => launchApp('viewer', { filePath: fullPath }) },
+          { label: 'Files Explorer', action: () => launchApp('files', { initialPath: item.type === 'dir' ? fullPath : '~/Desktop' }) }
+        ]
+      },
+      { separator: true },
+      {
+        label: 'Duplicate',
+        icon: 'copy',
+        action: async () => {
+          try {
+            await api.duplicateItem(fullPath);
+            await loadDesktopFiles();
+          } catch (err: any) {
+            notifications.add({ title: 'Error', message: err.message, type: 'error' });
+          }
+        }
       },
       {
         label: 'Rename',
@@ -223,9 +264,8 @@
       },
       { separator: true },
       {
-        label: 'Delete',
+        label: 'Move to Trash',
         icon: 'trash',
-        danger: true,
         action: async () => {
           try {
             await api.deleteItem(fullPath);
@@ -259,7 +299,7 @@
       />
     {/each}
 
-    <!-- 2. Real Desktop Files and Folders -->
+    <!-- 2. Desktop Files & Folders -->
     {#each desktopFiles as item (item.name)}
       <DesktopIcon
         title={item.name}
@@ -272,7 +312,8 @@
     {/each}
   </div>
 
-  {#if isSelecting && selBox && (selBox.width > 3 || selBox.height > 3)}
+  <!-- Rubberband selection box -->
+  {#if selBox}
     <div 
       class="selection-box"
       style={`left: ${selBox.left}px; top: ${selBox.top}px; width: ${selBox.width}px; height: ${selBox.height}px;`}
@@ -285,30 +326,29 @@
     position: absolute;
     top: 0;
     left: 0;
-    right: 0;
-    bottom: 46px; /* Taskbar height */
+    width: 100vw;
+    height: calc(100vh - 46px);
     overflow: hidden;
-    z-index: 10;
+    user-select: none;
+    z-index: 1;
   }
 
   .desktop-grid {
-    padding: 16px;
-    display: grid;
-    grid-auto-flow: column;
-    grid-template-rows: repeat(auto-fill, 92px);
-    grid-auto-columns: 86px;
-    gap: 8px 12px;
-    height: 100%;
-    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    flex-wrap: wrap;
     align-content: flex-start;
+    height: 100%;
+    padding: 16px;
+    gap: 8px;
   }
 
   .selection-box {
-    position: fixed;
-    background: var(--accent-surface);
-    border: 1px solid var(--accent-primary);
+    position: absolute;
+    border: 1px solid rgba(82, 139, 255, 0.8);
+    background: rgba(82, 139, 255, 0.2);
     border-radius: 2px;
     pointer-events: none;
-    z-index: 50;
+    z-index: 99;
   }
 </style>

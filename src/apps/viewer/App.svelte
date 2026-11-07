@@ -2,18 +2,23 @@
   import { onDestroy } from 'svelte';
   import { getIconSvg } from '../../assets/icons/icons';
 
-  export let arg: string | undefined = undefined;
+  interface Props {
+    arg?: any;
+    filePath?: string;
+  }
 
-  let mediaEl: HTMLVideoElement | HTMLAudioElement | null = null;
+  let { arg, filePath: propFilePath }: Props = $props();
 
-  $: filePath = typeof arg === 'string' ? arg : '';
-  $: fileName = filePath ? filePath.split('/').pop() : '';
-  $: ext = fileName ? fileName.split('.').pop()?.toLowerCase() || '' : '';
-  $: fileUrl = filePath ? `/api/file?path=${encodeURIComponent(filePath)}` : '';
+  let mediaEl = $state<HTMLVideoElement | HTMLAudioElement | null>(null);
 
-  $: isImage = /^(png|jpe?g|webp|gif|svg|bmp)$/.test(ext);
-  $: isAudio = /^(mp3|wav|ogg|flac|m4a)$/.test(ext);
-  $: isVideo = /^(mp4|webm)$/.test(ext);
+  let activePath = $derived(propFilePath || (typeof arg === 'string' ? arg : ''));
+  let fileName = $derived(activePath ? activePath.split(/[\\/]/).pop() || '' : '');
+  let ext = $derived(fileName ? fileName.split('.').pop()?.toLowerCase() || '' : '');
+  let fileUrl = $derived(activePath ? `/api/file?path=${encodeURIComponent(activePath)}` : '');
+
+  let isImage = $derived(/^(png|jpe?g|webp|gif|svg|bmp|ico)$/.test(ext));
+  let isAudio = $derived(/^(mp3|wav|ogg|flac|m4a|aac)$/.test(ext));
+  let isVideo = $derived(/^(mp4|webm|mkv|avi|mov)$/.test(ext));
 
   onDestroy(() => {
     if (mediaEl) {
@@ -25,9 +30,9 @@
 </script>
 
 <div class="media-app">
-  {#if !filePath}
+  {#if !activePath}
     <div class="empty-state">
-      <div style="width: 48px; height: 48px; margin: 0 auto 12px; color: var(--text-dim);">
+      <div style="width: 48px; height: 48px; margin: 0 auto 12px; color: var(--text-dim, #94a3b8);">
         {@html getIconSvg('viewer')}
       </div>
       <div>Open an image, audio, or video file from Files</div>
@@ -35,7 +40,9 @@
   {:else if isImage}
     <img src={fileUrl} alt={fileName} class="media-img" />
   {:else if isVideo}
-    <video src={fileUrl} controls autoplay bind:this={mediaEl} class="media-video"></video>
+    <video src={fileUrl} controls autoplay bind:this={mediaEl} class="media-video">
+      <track kind="captions" />
+    </video>
   {:else if isAudio}
     <div class="media-audio-card">
       <div class="audio-badge">
@@ -45,7 +52,7 @@
       <audio src={fileUrl} controls autoplay bind:this={mediaEl} style="width: 100%;"></audio>
     </div>
   {:else}
-    <div class="empty-state">Unsupported file format</div>
+    <div class="empty-state">Unsupported file format: .{ext}</div>
   {/if}
 </div>
 
@@ -61,7 +68,7 @@
     position: relative;
   }
   .empty-state {
-    color: var(--text-muted);
+    color: var(--text-muted, #64748b);
     text-align: center;
     font-size: 13px;
   }

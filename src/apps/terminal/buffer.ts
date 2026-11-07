@@ -1,7 +1,7 @@
 /**
  * Saturn OS - Terminal Screen Buffer & Scrollback History
- * Manages raw character streams, cursor carriage returns (\r),
- * backspaces (\b), line feeds (\n), and scrollback limit.
+ * High-performance cell-based line buffer supporting VT100/ANSI sequences,
+ * in-place carriage returns (\r), cursor movements, and TrueColor styles.
  */
 
 import { ansiToHtml } from './ansi';
@@ -11,16 +11,22 @@ export interface TerminalBufferOptions {
   onUpdate?: () => void;
 }
 
+interface Cell {
+  char: string;
+  ansi: string;
+}
+
 export class TerminalBuffer {
   public lines: string[] = [];
-  public currentLine = '';
+  public currentCells: Cell[] = [];
   public cursorCol = 0;
 
   private maxScrollback: number;
   private onUpdate?: () => void;
+  private currentAnsi = '';
 
   constructor(options: TerminalBufferOptions = {}) {
-    this.maxScrollback = options.maxScrollback || 1500;
+    this.maxScrollback = options.maxScrollback || 2000;
     this.onUpdate = options.onUpdate;
   }
 
@@ -34,36 +40,78 @@ export class TerminalBuffer {
     const len = chunk.length;
 
     while (i < len) {
-      // 1. Check for ANSI Clear Screen / Line Sequences
-      if (chunk.charCodeAt(i) === 0x1b && chunk[i + 1] === '[') {
-        const match = chunk.substring(i).match(/^\x1b\[([0-9;?]*)([a-zA-Z])/);
-        if (match) {
-          const params = match[1];
-          const command = match[2];
-          const fullMatch = match[0];
+      const code = chunk.charCodeAt(i);
 
-          if (command === 'J') {
-            // Clear screen: 2J = entire screen, 3J = scrollback
-            if (params === '2' || params === '3' || !params) {
-              this.lines = [];
-              this.currentLine = '';
-              this.cursorCol = 0;
-            }
-          } else if (command === 'K') {
-            // Clear line: 2K = entire line, 0K = cursor to end
-            if (params === '2' || !params) {
-              this.currentLine = '';
-              this.cursorCol = 0;
-            } else if (params === '0') {
-              this.currentLine = this.currentLine.substring(0, this.cursorCol);
-            }
-          } else {
-            // Preserve other ANSI styling sequences in the currentLine string
-            this.currentLine += fullMatch;
+      // 1. ANSI Escape Sequence (\x1b...)
+      if (code === 0x1b) {
+        // OSC Sequence (\x1b]...BEL or ST) - typically window title
+        if (chunk[i + 1] === ']') {
+          let j = i + 2;
+          while (j < len && chunk[j] !== '\x07' && !(chunk[j] === '\x1b' && chunk[j + 1] === '\\')) {
+            j++;
           }
+          if (j < len) {
+            i = chunk[j] === '\x07' ? j + 1 : j + 2;
+            continue;
+          }
+        }
 
-          i += fullMatch.length;
-          continue;
+        // CSI Sequence (\x1b[...)
+        if (chunk[i + 1] === '[') {
+          const sub = chunk.substring(i);
+          const match = sub.match(/^\x1b\[([?0-9;]*)([a-zA-Z])/);
+          if (match) {
+            const params = match[1] || '';
+            const cmd = match[2];
+            const fullMatch = match[0];
+
+            if (cmd === 'm') {
+              // Styling / Colors
+              if (params === '' || params === '0') {
+                this.currentAnsi = '\x1b[0m';
+              } else {
+                this.currentAnsi += fullMatch;
+              }
+            } else if (cmd === 'J') {
+              // Clear screen / scrollback
+              if (params === '2' || params === '3' || !params) {
+                this.lines = [];
+                this.currentCells = [];
+                this.cursorCol = 0;
+              }
+            } else if (cmd === 'K') {
+              // Clear in line
+              if (params === '2') {
+                // Clear entire line
+                this.currentCells = [];
+                this.cursorCol = 0;
+              } else if (params === '1') {
+                // Clear from beginning to cursor
+                for (let c = 0; c <= this.cursorCol && c < this.currentCells.length; c++) {
+                  this.currentCells[c] = { char: ' ', ansi: '' };
+                }
+              } else {
+                // Clear from cursor to end
+                this.currentCells.splice(this.cursorCol);
+              }
+            } else if (cmd === 'C') {
+              // Cursor Forward
+              const count = parseInt(params, 10) || 1;
+              this.cursorCol += count;
+            } else if (cmd === 'D') {
+              // Cursor Backward
+              const count = parseInt(params, 10) || 1;
+              this.cursorCol = Math.max(0, this.cursorCol - count);
+            } else if (cmd === 'H' || cmd === 'f') {
+              // Cursor Position (row;col)
+              const parts = params.split(';');
+              const col = parseInt(parts[1] || '1', 10) - 1;
+              this.cursorCol = Math.max(0, col);
+            }
+
+            i += fullMatch.length;
+            continue;
+          }
         }
       }
 
@@ -71,59 +119,93 @@ export class TerminalBuffer {
 
       // 2. Carriage Return + Line Feed (\r\n)
       if (ch === '\r' && chunk[i + 1] === '\n') {
-        this.pushLine(this.currentLine);
-        this.currentLine = '';
-        this.cursorCol = 0;
+        this.commitCurrentLine();
         i += 2;
         continue;
       }
 
-      // 3. Newline (\n)
+      // 3. Line Feed (\n)
       if (ch === '\n') {
-        this.pushLine(this.currentLine);
-        this.currentLine = '';
-        this.cursorCol = 0;
+        this.commitCurrentLine();
         i++;
         continue;
       }
 
-      // 4. Carriage Return (\r) - in-place overwrite for CLI progress bars
+      // 4. Carriage Return (\r) - in-place overwrite for progress bars / CLI spinners
       if (ch === '\r') {
         this.cursorCol = 0;
         i++;
         continue;
       }
 
-      // 5. Backspace (\b)
-      if (ch === '\b') {
+      // 5. Backspace (\b or \x7f)
+      if (ch === '\b' || code === 0x7f) {
         if (this.cursorCol > 0) {
           this.cursorCol--;
-          // Remove character at cursor if at end of line
-          if (this.cursorCol === this.currentLine.length - 1) {
-            this.currentLine = this.currentLine.slice(0, -1);
+          if (this.cursorCol === this.currentCells.length - 1) {
+            this.currentCells.pop();
           }
         }
         i++;
         continue;
       }
 
-      // 6. Normal character
-      if (this.cursorCol < this.currentLine.length) {
-        // Overwrite character at cursor position
-        this.currentLine =
-          this.currentLine.substring(0, this.cursorCol) +
-          ch +
-          this.currentLine.substring(this.cursorCol + 1);
-      } else {
-        // Append to current line
-        this.currentLine += ch;
+      // 6. Tab (\t) -> advance to next multiple of 4
+      if (ch === '\t') {
+        const nextStop = Math.floor((this.cursorCol + 4) / 4) * 4;
+        while (this.cursorCol < nextStop) {
+          this.writeCell(' ');
+        }
+        i++;
+        continue;
       }
 
-      this.cursorCol++;
+      // 7. Regular printable character
+      if (code >= 32 || code === 0x1b) {
+        this.writeCell(ch);
+      }
+
       i++;
     }
 
     this.onUpdate?.();
+  }
+
+  private writeCell(ch: string): void {
+    // Fill gaps if cursorCol jumped forward
+    while (this.currentCells.length < this.cursorCol) {
+      this.currentCells.push({ char: ' ', ansi: '' });
+    }
+
+    this.currentCells[this.cursorCol] = {
+      char: ch,
+      ansi: this.currentAnsi
+    };
+    this.cursorCol++;
+  }
+
+  private commitCurrentLine(): void {
+    const rawLine = this.cellsToAnsiString(this.currentCells);
+    this.pushLine(rawLine);
+    this.currentCells = [];
+    this.cursorCol = 0;
+  }
+
+  private cellsToAnsiString(cells: Cell[]): string {
+    if (cells.length === 0) return '';
+    let out = '';
+    let lastAnsi = '';
+    for (const cell of cells) {
+      if (cell.ansi !== lastAnsi) {
+        out += cell.ansi;
+        lastAnsi = cell.ansi;
+      }
+      out += cell.char;
+    }
+    if (lastAnsi && !lastAnsi.endsWith('\x1b[0m')) {
+      out += '\x1b[0m';
+    }
+    return out;
   }
 
   private pushLine(line: string): void {
@@ -138,8 +220,9 @@ export class TerminalBuffer {
    */
   public clear(): void {
     this.lines = [];
-    this.currentLine = '';
+    this.currentCells = [];
     this.cursorCol = 0;
+    this.currentAnsi = '';
     this.onUpdate?.();
   }
 
@@ -148,18 +231,9 @@ export class TerminalBuffer {
    */
   public getHtmlLines(): string[] {
     const rendered = this.lines.map(line => ansiToHtml(line) || '&nbsp;');
-    if (this.currentLine) {
-      rendered.push(ansiToHtml(this.currentLine));
-    }
+    // Add active line being edited
+    const activeRaw = this.cellsToAnsiString(this.currentCells);
+    rendered.push(ansiToHtml(activeRaw) || '&nbsp;');
     return rendered;
-  }
-
-  /**
-   * Gets raw plain-text content (for copy/clipboard)
-   */
-  public getPlainText(): string {
-    const all = [...this.lines];
-    if (this.currentLine) all.push(this.currentLine);
-    return all.join('\n');
   }
 }

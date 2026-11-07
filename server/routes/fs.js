@@ -2,15 +2,25 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const {
   RH,
   TRASH_DIR,
   DESKTOP_DIR,
+  DOCUMENTS_DIR,
+  DOWNLOADS_DIR,
+  PICTURES_DIR,
+  MUSIC_DIR,
+  VIDEOS_DIR,
   ApiError,
   resolveSafePath,
   sanitizeName,
   getUniquePath,
-  moveFileOrFolder
+  moveFileOrFolder,
+  getTrashMetadata,
+  saveTrashMetadata,
+  recordTrashItem,
+  removeTrashItemMeta
 } = require('../lib/paths');
 
 function searchFiles(query, rootDir) {
@@ -20,8 +30,8 @@ function searchFiles(query, rootDir) {
   let scannedCount = 0;
   const startTime = Date.now();
 
-  while (queue.length > 0 && results.length < 50 && scannedCount < 10000) {
-    if (Date.now() - startTime > 350) break;
+  while (queue.length > 0 && results.length < 60 && scannedCount < 10000) {
+    if (Date.now() - startTime > 400) break;
     const [currentDir, depth] = queue.shift();
 
     let entries;
@@ -32,7 +42,7 @@ function searchFiles(query, rootDir) {
     }
 
     for (const entry of entries) {
-      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.saturn-trash') continue;
       scannedCount++;
 
       const fullPath = path.join(currentDir, entry.name);
@@ -40,12 +50,13 @@ function searchFiles(query, rootDir) {
         results.push({
           name: entry.name,
           path: fullPath,
-          type: entry.isDirectory() ? 'dir' : 'file'
+          type: entry.isDirectory() ? 'dir' : 'file',
+          isDir: entry.isDirectory()
         });
-        if (results.length >= 50) break;
+        if (results.length >= 60) break;
       }
 
-      if (entry.isDirectory() && depth < 4) {
+      if (entry.isDirectory() && depth < 5) {
         queue.push([fullPath, depth + 1]);
       }
     }
@@ -55,23 +66,72 @@ function searchFiles(query, rootDir) {
 }
 
 function handleFsGet(pathname, query) {
+  if (pathname === '/api/fs/info') {
+    let username = 'sanu';
+    try {
+      const u = os.userInfo();
+      if (u && u.username) username = u.username;
+    } catch (e) {}
+
+    return {
+      home: RH,
+      desktop: DESKTOP_DIR,
+      documents: DOCUMENTS_DIR,
+      downloads: DOWNLOADS_DIR,
+      pictures: PICTURES_DIR,
+      music: MUSIC_DIR,
+      videos: VIDEOS_DIR,
+      trash: TRASH_DIR,
+      platform: process.platform,
+      sep: path.sep,
+      username
+    };
+  }
+
   if (pathname === '/api/fs/list') {
-    const targetDir = resolveSafePath(query.get('path') || RH);
+    const rawPath = query.get('path');
+    const targetDir = resolveSafePath(rawPath || RH);
     const stat = fs.statSync(targetDir);
     if (!stat.isDirectory()) throw new ApiError(400, 'Target is not a directory');
 
+    const showHidden = query.get('hidden') === '1' || query.get('hidden') === 'true';
+    const isTrash = targetDir === TRASH_DIR;
+    const trashMeta = isTrash ? getTrashMetadata() : null;
+
     const items = [];
-    const entries = fs.readdirSync(targetDir).slice(0, 2000);
+    const entries = fs.readdirSync(targetDir).slice(0, 3000);
     for (const name of entries) {
+      // Don't show internal trash metadata file
+      if (isTrash && name === '.metadata.json') continue;
+      // Filter out internal hidden files if hidden is off, but allow .saturn-trash check
+      const isHidden = name.startsWith('.');
+      if (!showHidden && isHidden && !isTrash) {
+        if (name === '.saturn-trash') continue;
+      }
+
       try {
         const itemPath = path.join(targetDir, name);
         const itemStat = fs.statSync(itemPath);
-        items.push({
+        const isDir = itemStat.isDirectory();
+        const ext = isDir ? '' : path.extname(name).replace(/^\./, '').toLowerCase();
+
+        const itemObj = {
           name,
-          type: itemStat.isDirectory() ? 'dir' : 'file',
+          path: itemPath,
+          type: isDir ? 'dir' : 'file',
+          isDir,
           size: itemStat.size,
-          mtime: itemStat.mtimeMs
-        });
+          mtime: itemStat.mtimeMs,
+          ext,
+          hidden: isHidden
+        };
+
+        if (isTrash && trashMeta && trashMeta[name]) {
+          itemObj.originalPath = trashMeta[name].originalPath;
+          itemObj.deletedAt = trashMeta[name].deletedAt;
+        }
+
+        items.push(itemObj);
       } catch (e) {}
     }
 
@@ -87,10 +147,10 @@ function handleFsGet(pathname, query) {
     const targetFile = resolveSafePath(query.get('path') || '');
     const stat = fs.statSync(targetFile);
     if (!stat.isFile()) throw new ApiError(400, 'Target is not a file');
-    if (stat.size > 5 * 1024 * 1024) throw new ApiError(413, 'File exceeds 5MB limit');
+    if (stat.size > 10 * 1024 * 1024) throw new ApiError(413, 'File exceeds 10MB limit');
 
     const content = fs.readFileSync(targetFile, 'utf8');
-    return { path: targetFile, content };
+    return { path: targetFile, content, size: stat.size, mtime: stat.mtimeMs };
   }
 
   if (pathname === '/api/fs/search') {
@@ -104,18 +164,109 @@ function handleFsGet(pathname, query) {
 }
 
 function handleFsPost(pathname, body) {
+  // 1. Create File or Directory (Real PC creation)
+  if (pathname === '/api/fs/create') {
+    const targetDir = resolveSafePath(body.dir || RH, true);
+    const dirStat = fs.statSync(targetDir);
+    if (!dirStat.isDirectory()) throw new ApiError(400, 'Target location is not a directory');
+
+    const itemType = body.type === 'dir' ? 'dir' : 'file';
+    let defaultName = itemType === 'dir' ? 'New Folder' : 'New Text Document.txt';
+    if (body.name && typeof body.name === 'string' && body.name.trim()) {
+      defaultName = sanitizeName(body.name);
+    }
+
+    const finalPath = getUniquePath(targetDir, defaultName);
+    const finalName = path.basename(finalPath);
+
+    if (itemType === 'dir') {
+      fs.mkdirSync(finalPath, { recursive: true });
+    } else {
+      const initialContent = typeof body.content === 'string' ? body.content : '';
+      fs.writeFileSync(finalPath, initialContent, 'utf8');
+    }
+
+    const stat = fs.statSync(finalPath);
+    return {
+      ok: true,
+      path: finalPath,
+      name: finalName,
+      type: itemType,
+      isDir: itemType === 'dir',
+      size: stat.size,
+      mtime: stat.mtimeMs
+    };
+  }
+
+  // 2. Duplicate File or Directory
+  if (pathname === '/api/fs/duplicate') {
+    const srcPath = resolveSafePath(body.path, true);
+    if (srcPath === RH) throw new ApiError(403, 'Cannot duplicate root directory');
+
+    const parentDir = path.dirname(srcPath);
+    const ext = path.extname(srcPath);
+    const base = path.basename(srcPath, ext);
+    const copyName = `${base} - Copy${ext}`;
+    const targetPath = getUniquePath(parentDir, copyName);
+
+    fs.cpSync(srcPath, targetPath, { recursive: true });
+    const stat = fs.statSync(targetPath);
+    return {
+      ok: true,
+      path: targetPath,
+      name: path.basename(targetPath),
+      type: stat.isDirectory() ? 'dir' : 'file',
+      size: stat.size
+    };
+  }
+
+  // 3. Restore from Trash
+  if (pathname === '/api/fs/restore') {
+    const trashItem = resolveSafePath(body.path, true);
+    if (!trashItem.startsWith(TRASH_DIR + path.sep)) {
+      throw new ApiError(400, 'Item is not in Trash');
+    }
+
+    const itemName = path.basename(trashItem);
+    const meta = getTrashMetadata();
+    const itemMeta = meta[itemName];
+    let destPath;
+
+    if (itemMeta && itemMeta.originalPath) {
+      const origDir = path.dirname(itemMeta.originalPath);
+      try {
+        if (!fs.existsSync(origDir)) fs.mkdirSync(origDir, { recursive: true });
+      } catch (e) {}
+      destPath = getUniquePath(origDir, path.basename(itemMeta.originalPath));
+    } else {
+      // Fallback to Desktop or Home
+      destPath = getUniquePath(DESKTOP_DIR, itemName);
+    }
+
+    moveFileOrFolder(trashItem, destPath);
+    removeTrashItemMeta(itemName);
+    return { ok: true, path: destPath, name: path.basename(destPath) };
+  }
+
+  // 4. Write File
   if (pathname === '/api/fs/write') {
-    if (typeof body.content !== 'string' || body.content.length > 5 * 1024 * 1024) {
-      throw new ApiError(400, 'Invalid file content (max 5MB string)');
+    if (typeof body.content !== 'string' || body.content.length > 10 * 1024 * 1024) {
+      throw new ApiError(400, 'Invalid file content (max 10MB string)');
     }
     const targetPath = resolveSafePath(body.path, false);
+    const parentDir = path.dirname(targetPath);
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
+    }
     if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
       throw new ApiError(400, 'Target path is a directory');
     }
     fs.writeFileSync(targetPath, body.content, 'utf8');
-    return { ok: true, path: targetPath };
+    const stat = fs.statSync(targetPath);
+    return { ok: true, path: targetPath, name: path.basename(targetPath), size: stat.size, mtime: stat.mtimeMs };
   }
 
+  // 5. Make Directory (mkdir)
   if (pathname === '/api/fs/mkdir') {
     let parentDir;
     let folderName;
@@ -142,7 +293,8 @@ function handleFsPost(pathname, body) {
       }
       folderName = sanitizeName(baseName);
     } else {
-      throw new ApiError(400, 'Folder path or name is required');
+      parentDir = RH;
+      folderName = 'New Folder';
     }
 
     if (!fs.existsSync(parentDir)) {
@@ -153,26 +305,33 @@ function handleFsPost(pathname, body) {
 
     const finalPath = getUniquePath(parentDir, folderName);
     fs.mkdirSync(finalPath, { recursive: true });
-    return { ok: true, path: finalPath, name: path.basename(finalPath) };
+    return { ok: true, path: finalPath, name: path.basename(finalPath), isDir: true };
   }
 
+  // 6. Rename
   if (pathname === '/api/fs/rename') {
     const sourcePath = resolveSafePath(body.path, true);
     if (sourcePath === RH) throw new ApiError(403, 'Cannot rename root home directory');
     const newName = sanitizeName(body.name);
     const destPath = path.join(path.dirname(sourcePath), newName);
-    if (fs.existsSync(destPath)) throw new ApiError(409, 'Name already in use');
+    if (fs.existsSync(destPath) && destPath.toLowerCase() !== sourcePath.toLowerCase()) {
+      throw new ApiError(409, 'A file or folder with that name already exists');
+    }
     fs.renameSync(sourcePath, destPath);
-    return { ok: true, path: destPath };
+    return { ok: true, path: destPath, name: newName };
   }
 
+  // 7. Delete (Move to Trash / Empty Trash)
   if (pathname === '/api/fs/delete') {
     if (body.emptyTrash === true) {
       if (fs.existsSync(TRASH_DIR)) {
         for (const item of fs.readdirSync(TRASH_DIR)) {
-          fs.rmSync(path.join(TRASH_DIR, item), { recursive: true, force: true });
+          try {
+            fs.rmSync(path.join(TRASH_DIR, item), { recursive: true, force: true });
+          } catch (e) {}
         }
       }
+      saveTrashMetadata({});
       return { ok: true, emptied: true };
     }
 
@@ -184,15 +343,22 @@ function handleFsPost(pathname, body) {
       throw new ApiError(403, 'Cannot delete Desktop folder');
     }
 
-    if (sourcePath.startsWith(TRASH_DIR + path.sep)) {
+    // If permanent deletion requested or already in Trash
+    if (body.permanent === true || sourcePath.startsWith(TRASH_DIR + path.sep)) {
       fs.rmSync(sourcePath, { recursive: true, force: true });
-    } else {
-      const dest = getUniquePath(TRASH_DIR, path.basename(sourcePath));
-      moveFileOrFolder(sourcePath, dest);
+      removeTrashItemMeta(path.basename(sourcePath));
+      return { ok: true, permanent: true };
     }
-    return { ok: true };
+
+    // Move to Trash
+    const trashTarget = getUniquePath(TRASH_DIR, path.basename(sourcePath));
+    const trashFileName = path.basename(trashTarget);
+    recordTrashItem(trashFileName, sourcePath);
+    moveFileOrFolder(sourcePath, trashTarget);
+    return { ok: true, trashed: true, trashPath: trashTarget };
   }
 
+  // 8. Copy or Move
   if (pathname === '/api/fs/copy' || pathname === '/api/fs/move') {
     const src = resolveSafePath(body.src, true);
     const dest = resolveSafePath(body.dest, true);
@@ -214,7 +380,7 @@ function handleFsPost(pathname, body) {
     } else {
       moveFileOrFolder(src, target);
     }
-    return { ok: true, path: target };
+    return { ok: true, path: target, name: path.basename(target) };
   }
 
   throw new ApiError(404, 'Unknown FS POST endpoint');

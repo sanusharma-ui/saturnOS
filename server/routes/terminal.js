@@ -118,8 +118,12 @@ function handleTerminalUpgrade(req, socket, head) {
 
     socket.write(responseHeaders.join('\r\n'));
 
-    // Retrieve or create session
+    // Retrieve parameters
     const sessionId = parsedUrl.searchParams.get('id') || `term_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const requestedShell = parsedUrl.searchParams.get('shell') || '';
+    const requestedCwd = parsedUrl.searchParams.get('cwd') || '';
+    const cols = parseInt(parsedUrl.searchParams.get('cols') || '80', 10);
+    const rows = parseInt(parsedUrl.searchParams.get('rows') || '24', 10);
 
     const sendMsg = obj => {
       try {
@@ -138,7 +142,8 @@ function handleTerminalUpgrade(req, socket, head) {
         },
         (code, signal) => {
           sendMsg({ type: 'exit', code, signal });
-        }
+        },
+        { shell: requestedShell, cwd: requestedCwd, cols, rows }
       );
     } else {
       // Re-attach listeners to existing active session
@@ -155,6 +160,7 @@ function handleTerminalUpgrade(req, socket, head) {
       type: 'ready',
       sessionId: session.id,
       shell: session.shell,
+      cwd: session.cwd,
       pid: session.process ? session.process.pid : 0
     });
 
@@ -182,6 +188,8 @@ function handleTerminalUpgrade(req, socket, head) {
             const clientMsg = JSON.parse(msg.data);
             if (clientMsg.type === 'input') {
               session.write(clientMsg.data);
+            } else if (clientMsg.type === 'resize') {
+              session.resize(clientMsg.cols || 80, clientMsg.rows || 24);
             } else if (clientMsg.type === 'signal') {
               session.kill(clientMsg.signal);
             } else if (clientMsg.type === 'ping') {
