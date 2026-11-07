@@ -4,6 +4,7 @@
   import { windowsStore, activeWindowIdStore } from '../core/wm/store';
   import { wmManager } from '../core/wm/manager';
   import { APP_REGISTRY, launchApp } from '../core/registry/appRegistry';
+  import { contextMenuStore } from '../core/contextmenu/store';
   import { api } from '../core/api/client';
   import type { WindowInstance } from '../core/wm/types';
 
@@ -29,7 +30,7 @@
   // Sound/Mute state
   let isMuted = $state(false);
 
-  // Pinned App IDs
+  // Pinned App Quick-Launchers
   const PINNED_APP_IDS = ['files', 'editor', 'terminal', 'browser', 'ai', 'monitor', 'settings'];
 
   onMount(() => {
@@ -60,33 +61,54 @@
     clearInterval(batteryInterval);
   });
 
-  // Handle taskbar button click for an app
-  function handleAppClick(appId: string) {
-    const appWins = $windowsStore.filter(w => w.appId === appId);
-    if (appWins.length === 0) {
-      launchApp(appId);
-      return;
-    }
-
-    if (appWins.length === 1) {
-      const win = appWins[0];
-      if (win.minimized) {
-        wmManager.restore(win.id);
-      } else if ($activeWindowIdStore === win.id) {
-        wmManager.minimize(win.id);
-      } else {
-        wmManager.focus(win.id);
-      }
+  // Handle click on an open window tab
+  function handleWindowTabClick(win: WindowInstance) {
+    if (win.minimized) {
+      wmManager.restore(win.id);
+      wmManager.focus(win.id);
+    } else if (win.id === $activeWindowIdStore) {
+      wmManager.minimize(win.id);
     } else {
-      // Multiple instances: cycle or bring active
-      const activeInGroup = appWins.find(w => w.id === $activeWindowIdStore);
-      if (activeInGroup) {
-        const nextIdx = (appWins.indexOf(activeInGroup) + 1) % appWins.length;
-        wmManager.focus(appWins[nextIdx].id);
-      } else {
-        wmManager.focus(appWins[0].id);
-      }
+      wmManager.focus(win.id);
     }
+  }
+
+  // Handle right click on an open window tab
+  function handleWindowTabContextMenu(e: MouseEvent, win: WindowInstance) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    contextMenuStore.open(e.clientX, e.clientY, [
+      {
+        label: win.minimized ? 'Restore' : 'Bring to Front',
+        icon: win.icon,
+        action: () => {
+          if (win.minimized) wmManager.restore(win.id);
+          wmManager.focus(win.id);
+        }
+      },
+      {
+        label: win.minimized ? 'Restore' : 'Minimize',
+        icon: 'up',
+        action: () => {
+          if (win.minimized) wmManager.restore(win.id);
+          else wmManager.minimize(win.id);
+        }
+      },
+      {
+        label: win.maximized ? 'Restore Window' : 'Maximize',
+        icon: 'grid',
+        action: () => wmManager.maximize(win.id)
+      },
+      { separator: true },
+      {
+        label: 'Close Window',
+        icon: 'close',
+        shortcut: 'Alt+F4',
+        danger: true,
+        action: () => wmManager.close(win.id)
+      }
+    ]);
   }
 
   // Show desktop toggle
@@ -106,9 +128,11 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <footer class="taskbar" onclick={(e) => e.stopPropagation()}>
+  <!-- Left Side: Start + Search + Pinned Quick Launch -->
   <div class="taskbar-left">
     <!-- Start Button -->
     <button 
+      type="button"
       class="start-btn" 
       class:active={launcherOpen} 
       onclick={(e) => {
@@ -125,6 +149,7 @@
 
     <!-- Search Quick Trigger -->
     <button 
+      type="button"
       class="taskbar-search-btn"
       onclick={(e) => {
         e.stopPropagation();
@@ -133,71 +158,84 @@
       title="Search apps and files (Ctrl+Space)"
     >
       <span class="search-icon">
-        {@html getIconSvg('search', 1.75)}
+        {@html getIconSvg('search', 1.5)}
       </span>
-      <span class="search-label">Search...</span>
+      <span class="search-label">Search</span>
     </button>
+
+    <!-- Divider -->
+    <div class="taskbar-v-sep"></div>
+
+    <!-- Pinned Quick Launch Icons -->
+    <div class="pinned-quick-launch">
+      {#each PINNED_APP_IDS as appId}
+        {@const manifest = APP_REGISTRY[appId]}
+        {#if manifest}
+          <button
+            type="button"
+            class="pinned-btn"
+            onclick={(e) => {
+              e.stopPropagation();
+              launchApp(appId);
+            }}
+            title={`Launch ${manifest.name}`}
+          >
+            <span class="pinned-icon">
+              {@html getIconSvg(manifest.icon, 1.4)}
+            </span>
+          </button>
+        {/if}
+      {/each}
+    </div>
+
+    <!-- Divider -->
+    <div class="taskbar-v-sep"></div>
   </div>
 
-  <!-- Taskbar Apps List (Pinned + Running) -->
-  <div class="taskbar-center">
-    <!-- Pinned apps -->
-    {#each PINNED_APP_IDS as appId}
-      {@const manifest = APP_REGISTRY[appId]}
-      {@const wins = $windowsStore.filter(w => w.appId === appId)}
-      {@const isRunning = wins.length > 0}
-      {@const isActive = wins.some(w => w.id === $activeWindowIdStore)}
-      {#if manifest}
-        <button
-          class="app-btn"
-          class:running={isRunning}
+  <!-- Center Area: OPEN RUNNING APPLICATIONS (Real PC Taskbar) -->
+  <div class="taskbar-open-apps">
+    {#if $windowsStore.length === 0}
+      <span class="no-windows-hint">No open windows</span>
+    {:else}
+      {#each $windowsStore as win (win.id)}
+        {@const isActive = win.id === $activeWindowIdStore && !win.minimized}
+        <div
+          class="open-win-tab"
           class:active={isActive}
-          onclick={(e) => {
-            e.stopPropagation();
-            handleAppClick(appId);
-          }}
-          title={manifest.name}
-        >
-          <span class="app-icon">
-            {@html getIconSvg(manifest.icon, 1.75)}
-          </span>
-          {#if isRunning}
-            <span class="run-indicator" class:focused={isActive}></span>
-          {/if}
-        </button>
-      {/if}
-    {/each}
-
-    <!-- Running unpinned apps -->
-    {#each $windowsStore as win (win.id)}
-      {#if !PINNED_APP_IDS.includes(win.appId)}
-        <button
-          class="app-btn running"
-          class:active={win.id === $activeWindowIdStore}
-          onclick={(e) => {
-            e.stopPropagation();
-            if (win.minimized) wmManager.restore(win.id);
-            else if (win.id === $activeWindowIdStore) wmManager.minimize(win.id);
-            else wmManager.focus(win.id);
-          }}
+          class:minimized={win.minimized}
+          role="button"
+          tabindex="0"
+          onclick={() => handleWindowTabClick(win)}
+          oncontextmenu={(e) => handleWindowTabContextMenu(e, win)}
+          onkeydown={(e) => { if (e.key === 'Enter') handleWindowTabClick(win); }}
           title={win.title}
         >
-          <span class="app-icon">
-            {@html getIconSvg(win.icon, 1.75)}
+          <span class="win-tab-icon">
+            {@html getIconSvg(win.icon, 1.35)}
           </span>
-          <span class="run-indicator" class:focused={win.id === $activeWindowIdStore}></span>
-        </button>
-      {/if}
-    {/each}
+          <span class="win-tab-title">{win.title}</span>
+          <button
+            type="button"
+            class="win-tab-close"
+            onclick={(e) => {
+              e.stopPropagation();
+              wmManager.close(win.id);
+            }}
+            title="Close Window"
+          >×</button>
+          <div class="win-tab-indicator" class:focused={isActive}></div>
+        </div>
+      {/each}
+    {/if}
   </div>
 
-  <!-- System Tray -->
+  <!-- Right Side: System Tray -->
   <div class="taskbar-right">
-    <!-- Battery Widget (Hidden if not available) -->
+    <!-- Battery Widget -->
     {#if batteryInfo && batteryInfo.present}
       <div class="tray-item battery-widget" title={`Battery: ${batteryInfo.percent}% ${batteryInfo.charging ? '(Charging)' : ''}`}>
         <span class="tray-icon">
-          {@html getIconSvg(batteryInfo.charging ? 'batt-charging' : 'batt', 1.75)}
+          {@html getIconSvg(batteryInfo.charging ? 'batt-charging' : 'batt', 1.5)}
         </span>
         <span class="battery-text">{batteryInfo.percent}%</span>
       </div>
@@ -205,6 +243,7 @@
 
     <!-- Volume -->
     <button 
+      type="button"
       class="tray-item tray-btn" 
       onclick={(e) => {
         e.stopPropagation();
@@ -213,12 +252,13 @@
       title={isMuted ? 'Muted' : 'Volume 100%'}
     >
       <span class="tray-icon">
-        {@html getIconSvg(isMuted ? 'vol-mute' : 'vol', 1.75)}
+        {@html getIconSvg(isMuted ? 'vol-mute' : 'vol', 1.5)}
       </span>
     </button>
 
     <!-- Quick Settings Control Center Toggle -->
     <button 
+      type="button"
       class="tray-item tray-btn" 
       class:active={quickSettingsOpen}
       onclick={(e) => {
@@ -228,12 +268,13 @@
       title="Quick Settings"
     >
       <span class="tray-icon">
-        {@html getIconSvg('settings', 1.75)}
+        {@html getIconSvg('settings', 1.5)}
       </span>
     </button>
 
     <!-- Clock & Date -->
     <button 
+      type="button"
       class="tray-item tray-btn clock-widget"
       onclick={(e) => {
         e.stopPropagation();
@@ -247,6 +288,7 @@
 
     <!-- Show Desktop Peek Button -->
     <button 
+      type="button"
       class="show-desktop-btn" 
       onclick={(e) => {
         e.stopPropagation();
@@ -264,16 +306,16 @@
     left: 0;
     right: 0;
     height: 46px;
-    background: var(--bg-surface);
-    border-top: 1px solid var(--border-color);
+    background: var(--bg-surface, #181a20);
+    border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
     display: flex;
     align-items: center;
-    justify-content: space-between;
     padding: 0 4px;
     z-index: 1000;
     box-sizing: border-box;
     user-select: none;
     backdrop-filter: blur(16px);
+    gap: 8px;
   }
 
   .taskbar-left, .taskbar-right {
@@ -281,16 +323,7 @@
     align-items: center;
     gap: 6px;
     height: 100%;
-  }
-
-  .taskbar-center {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    height: 100%;
-    flex: 1;
-    justify-content: center;
-    overflow-x: auto;
+    flex: none;
   }
 
   .start-btn {
@@ -299,9 +332,9 @@
     gap: 8px;
     background: transparent;
     border: 1px solid transparent;
-    color: var(--text-primary);
-    padding: 4px 12px;
-    border-radius: var(--radius-sm);
+    color: var(--text-primary, #ffffff);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm, 6px);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -310,40 +343,41 @@
   }
 
   .start-btn:hover, .start-btn.active {
-    background: var(--bg-hover);
-    border-color: var(--border-color);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    border-color: var(--border-color, rgba(255, 255, 255, 0.12));
   }
 
   .start-icon {
-    width: 22px;
-    height: 22px;
-    color: var(--accent-primary);
+    width: 20px;
+    height: 20px;
+    color: var(--accent-primary, #3b82f6);
     display: flex;
     align-items: center;
   }
 
   .start-icon :global(svg) {
-    width: 22px;
-    height: 22px;
+    width: 20px;
+    height: 20px;
   }
 
   .taskbar-search-btn {
     display: flex;
     align-items: center;
     gap: 6px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
+    background: var(--bg-card, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+    border-radius: var(--radius-sm, 6px);
+    color: var(--text-muted, #94a3b8);
     padding: 4px 10px;
     font-size: 12px;
     cursor: pointer;
     height: 32px;
+    transition: all 0.15s;
   }
 
   .taskbar-search-btn:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    color: #ffffff;
   }
 
   .search-icon {
@@ -357,60 +391,177 @@
     height: 14px;
   }
 
-  /* App Buttons */
-  .app-btn {
-    width: 40px;
-    height: 38px;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+  .taskbar-v-sep {
+    width: 1px;
+    height: 22px;
+    background: var(--border-color, rgba(255, 255, 255, 0.1));
+    margin: 0 2px;
+  }
+
+  /* Pinned Quick Launch */
+  .pinned-quick-launch {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    justify-content: center;
+    gap: 2px;
+  }
+
+  .pinned-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary, #94a3b8);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .pinned-btn:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    color: #ffffff;
+  }
+
+  .pinned-icon {
+    width: 18px;
+    height: 18px;
+    display: flex;
+  }
+
+  .pinned-icon :global(svg) {
+    width: 18px;
+    height: 18px;
+  }
+
+  /* OPEN RUNNING APPLICATIONS SECTION */
+  .taskbar-open-apps {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 4px;
+  }
+
+  .taskbar-open-apps::-webkit-scrollbar {
+    height: 0px;
+  }
+
+  .no-windows-hint {
+    color: var(--text-muted, #64748b);
+    font-size: 11px;
+    font-style: italic;
+    opacity: 0.5;
+  }
+
+  /* Open Window Tab / Pill */
+  .open-win-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    min-width: 120px;
+    max-width: 200px;
+    padding: 0 8px 0 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: var(--text-secondary, #94a3b8);
+    font-size: 12px;
     cursor: pointer;
     position: relative;
-    color: var(--text-secondary);
-    transition: background 0.15s;
+    overflow: hidden;
+    transition: all 0.15s ease;
   }
 
-  .app-btn:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
+  .open-win-tab:hover {
+    background: rgba(255, 255, 255, 0.09);
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.15);
   }
 
-  .app-btn.active {
-    background: var(--accent-surface);
-    color: var(--accent-primary);
+  .open-win-tab.active {
+    background: rgba(59, 130, 246, 0.18);
+    border-color: var(--accent-primary, #3b82f6);
+    color: #ffffff;
+    font-weight: 500;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
   }
 
-  .app-icon {
-    width: 22px;
-    height: 22px;
+  .open-win-tab.minimized {
+    opacity: 0.6;
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  .open-win-tab.minimized:hover {
+    opacity: 0.9;
+  }
+
+  .win-tab-icon {
+    width: 16px;
+    height: 16px;
     display: flex;
     align-items: center;
-    justify-content: center;
+    flex: none;
   }
 
-  .app-icon :global(svg) {
-    width: 22px;
-    height: 22px;
+  .win-tab-icon :global(svg) {
+    width: 16px;
+    height: 16px;
   }
 
-  .run-indicator {
+  .win-tab-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+  }
+
+  .win-tab-close {
+    width: 16px;
+    height: 16px;
+    display: grid;
+    place-items: center;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 3px;
+    opacity: 0;
+    flex: none;
+    line-height: 1;
+    transition: opacity 0.1s, background 0.1s;
+  }
+
+  .open-win-tab:hover .win-tab-close {
+    opacity: 0.6;
+  }
+
+  .win-tab-close:hover {
+    opacity: 1 !important;
+    background: #ef4444;
+    color: #ffffff;
+  }
+
+  .win-tab-indicator {
     position: absolute;
-    bottom: 2px;
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--text-muted);
+    bottom: 0;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: rgba(255, 255, 255, 0.2);
   }
 
-  .run-indicator.focused {
-    width: 14px;
+  .win-tab-indicator.focused {
+    background: var(--accent-primary, #3b82f6);
     height: 3px;
-    border-radius: 2px;
-    background: var(--accent-primary);
+    box-shadow: 0 0 6px var(--accent-primary, #3b82f6);
   }
 
   /* Tray */
@@ -420,8 +571,8 @@
     gap: 6px;
     padding: 4px 8px;
     height: 34px;
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
+    border-radius: var(--radius-sm, 6px);
+    color: var(--text-secondary, #94a3b8);
     font-size: 12px;
   }
 
@@ -432,25 +583,25 @@
   }
 
   .tray-btn:hover, .tray-btn.active {
-    background: var(--bg-hover);
-    color: var(--text-primary);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    color: var(--text-primary, #ffffff);
   }
 
   .tray-icon {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     display: flex;
     align-items: center;
   }
 
   .tray-icon :global(svg) {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
   }
 
   .battery-widget {
     font-size: 11px;
-    color: var(--text-secondary);
+    color: var(--text-secondary, #94a3b8);
   }
 
   .clock-widget {
@@ -465,25 +616,25 @@
   .clock-time {
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--text-primary, #ffffff);
   }
 
   .clock-date {
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--text-muted, #64748b);
   }
 
   .show-desktop-btn {
     width: 6px;
     height: 32px;
     border: none;
-    border-left: 1px solid var(--border-color);
+    border-left: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
     background: transparent;
     cursor: pointer;
     margin-left: 4px;
   }
 
   .show-desktop-btn:hover {
-    background: var(--accent-primary);
+    background: var(--accent-primary, #3b82f6);
   }
 </style>
